@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
-use backoff::default;
 use libsigner::{SignerRunLoop, StackerDBChunksEvent};
 use slog::{slog_debug, slog_error, slog_info, slog_warn};
 use stacks_common::{debug, error, info, warn};
@@ -15,8 +14,8 @@ use wsts::state_machine::signer::Signer;
 use wsts::state_machine::{OperationResult, PublicKeys};
 use wsts::v2;
 
+use crate::client::{retry_with_exponential_backoff, ClientError, StackerDB, StacksClient};
 use crate::config::Config;
-use crate::stacks_client::{retry_with_exponential_backoff, ClientError, StacksClient};
 
 /// Which operation to perform
 #[derive(PartialEq, Clone)]
@@ -58,8 +57,10 @@ pub struct RunLoop<C> {
     // TODO: update this to use frost_signer directly instead of the frost signing round
     // See: https://github.com/stacks-network/stacks-blockchain/issues/3913
     pub signing_round: Signer<v2::Signer>,
-    /// The stacks client
+    /// The stacks node client
     pub stacks_client: StacksClient,
+    /// The stacker db client
+    pub stackerdb: StackerDB,
     /// Received Commands that need to be processed
     pub commands: VecDeque<RunLoopCommand>,
     /// The current state
@@ -96,7 +97,7 @@ impl<C: Coordinator> RunLoop<C> {
                 match self.coordinator.start_dkg_round() {
                     Ok(msg) => {
                         let ack = self
-                            .stacks_client
+                            .stackerdb
                             .send_message_with_retry(self.signing_round.signer_id, msg);
                         debug!("ACK: {:?}", ack);
                         self.state = State::Dkg;
@@ -122,7 +123,7 @@ impl<C: Coordinator> RunLoop<C> {
                 {
                     Ok(msg) => {
                         let ack = self
-                            .stacks_client
+                            .stackerdb
                             .send_message_with_retry(self.signing_round.signer_id, msg);
                         debug!("ACK: {:?}", ack);
                         self.state = State::Sign;
@@ -252,11 +253,13 @@ impl From<&Config> for RunLoop<FrostCoordinator<v2::Aggregator>> {
             config.signer_ids_public_keys.clone(),
         );
         let stacks_client = StacksClient::from(config);
+        let stackerdb = StackerDB::from(config);
         RunLoop {
             event_timeout: config.event_timeout,
             coordinator,
             signing_round,
             stacks_client,
+            stackerdb,
             commands: VecDeque::new(),
             state: State::Uninitialized,
         }
@@ -299,7 +302,7 @@ impl<C: Coordinator> SignerRunLoop<Vec<OperationResult>, RunLoopCommand> for Run
             );
             for msg in outbound_messages {
                 let ack = self
-                    .stacks_client
+                    .stackerdb
                     .send_message_with_retry(self.signing_round.signer_id, msg);
                 if let Ok(ack) = ack {
                     debug!("ACK: {:?}", ack);

@@ -6,6 +6,7 @@ use clarity::vm::types::QualifiedContractIdentifier;
 use libsigner::{RunningSigner, Signer, StackerDBEventReceiver};
 use stacks::chainstate::stacks::StacksPrivateKey;
 use stacks_common::types::chainstate::StacksAddress;
+use stacks_signer::client::SLOTS_PER_USER;
 use stacks_signer::config::Config as SignerConfig;
 use stacks_signer::runloop::RunLoopCommand;
 use stacks_signer::utils::{build_signer_config_tomls, build_stackerdb_contract};
