@@ -28,6 +28,7 @@
 (define-constant ERR_STACKING_IS_DELEGATED 30)
 (define-constant ERR_STACKING_NOT_DELEGATED 31)
 (define-constant ERR_STACKING_DURING_PREPARE_PHASE 32)
+(define-constant ERR_DELEGATION_ALREADY_REVOKED 33)
 
 ;; PoX disabling threshold (a percent)
 (define-constant POX_REJECTION_FRACTION u25)
@@ -654,12 +655,17 @@
           ;; return the lock-up information, so the node can actually carry out the lock.
           (ok { stacker: tx-sender, lock-amount: amount-ustx, unlock-burn-height: (reward-cycle-to-burn-height (+ first-reward-cycle lock-period)) }))))
 
+;; Revokes the delegation to the current stacking pool.
+;; New in pox-4: Fails if the delegation was already revoked.
+;; Returns the last delegation state.
 (define-public (revoke-delegate-stx)
-  (begin
+  (let ((stacker { stacker: tx-sender })
+        (last-delegation-state (map-get? delegation-state stacker)))
     ;; must be called directly by the tx-sender or by an allowed contract-caller
     (asserts! (check-caller-allowed)
               (err ERR_STACKING_PERMISSION_DENIED))
-    (ok (map-delete delegation-state { stacker: tx-sender }))))
+    (asserts! (map-delete delegation-state stacker) (err ERR_DELEGATION_ALREADY_REVOKED))
+    (ok last-delegation-state)))
 
 ;; Delegate to `delegate-to` the ability to stack from a given address.
 ;;  This method _does not_ lock the funds, rather, it allows the delegate
