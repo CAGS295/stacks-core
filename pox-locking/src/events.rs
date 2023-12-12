@@ -31,9 +31,11 @@ use stacks_common::{error, test_debug};
 /// - for delegate stacking functions, it's the first argument
 fn get_stacker(sender: &PrincipalData, function_name: &str, args: &[Value]) -> Value {
     match function_name {
-        "stack-stx" | "stack-increase" | "stack-extend" | "delegate-stx" => {
-            Value::Principal(sender.clone())
-        }
+        "stack-stx"
+        | "stack-increase"
+        | "stack-extend"
+        | "delegate-stx"
+        | "revoke-delegate-stx" => Value::Principal(sender.clone()),
         _ => args[0].clone(),
     }
 }
@@ -335,11 +337,20 @@ fn create_event_info_data_code(function_name: &str, args: &[Value]) -> String {
                 pox_addr = &args[3],
             )
         }
+        "revoke-delegate-stx" => {
+            format!(
+                r#"
+                {{
+                    data: {{ }}
+                }}
+                "#,
+            )
+        }
         _ => "{{ data: {{ unimplemented: true }} }}".into(),
     }
 }
 
-/// Synthesize an events data tuple to return on the successful execution of a pox-2 or pox-3 stacking
+/// Synthesize an events data tuple to return on the successful execution of a pox-2 or pox-3 or pox-4 stacking
 /// function.  It runs a series of Clarity queries against the PoX contract's data space (including
 /// calling PoX functions).
 pub fn synthesize_pox_event_info(
@@ -362,7 +373,8 @@ pub fn synthesize_pox_event_info(
         | "delegate-stack-extend"
         | "stack-increase"
         | "delegate-stack-increase"
-        | "delegate-stx" => Some(create_event_info_stack_or_delegate_code(
+        | "delegate-stx"
+        | "revoke-delegate-stx" => Some(create_event_info_stack_or_delegate_code(
             sender,
             function_name,
             args,
