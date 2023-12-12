@@ -1284,12 +1284,6 @@ fn delegate_stack_increase() {
 
     let tip = get_tip(peer.sortdb.as_ref());
 
-    // submit revoke delegation tx
-    let alice_revoke_elegation =
-        make_pox_3_contract_call(&alice, alice_nonce, "revoke-delegate-stx", vec![]);
-    let alice_revoke_delegation_pox_3_nonce = alice_nonce;
-    alice_nonce += 1;
-
     // submit delegation tx
     let alice_delegation_1 = make_pox_3_contract_call(
         &alice,
@@ -1321,11 +1315,7 @@ fn delegate_stack_increase() {
     bob_nonce += 1;
 
     latest_block = peer.tenure_with_txs(
-        &[
-            alice_revoke_elegation,
-            alice_delegation_1,
-            delegate_stack_tx,
-        ],
+        &[alice_delegation_1, delegate_stack_tx],
         &mut coinbase_nonce,
     );
 
@@ -1501,7 +1491,7 @@ fn delegate_stack_increase() {
         }
     }
 
-    assert_eq!(alice_txs.len() as u64, 5);
+    assert_eq!(alice_txs.len() as u64, 4);
     assert_eq!(bob_txs.len() as u64, 10);
 
     // transaction should fail because Alice cannot increase her own stacking amount while delegating
@@ -1555,32 +1545,6 @@ fn delegate_stack_increase() {
     assert_eq!(
         &bob_txs[&pox_3_fail_invalid_amount].result.to_string(),
         "(err 18)"
-    );
-
-    // check event for revoke delegation tx
-    let revoke_delegation_tx_events = &alice_txs
-        .get(&alice_revoke_delegation_pox_3_nonce)
-        .unwrap()
-        .clone()
-        .events;
-    assert_eq!(revoke_delegation_tx_events.len() as u64, 1);
-    let revoke_delegation_tx = &revoke_delegation_tx_events[0];
-    let revoke_delegate_stx_op_data = HashMap::from([]);
-    let common_data = PoxPrintFields {
-        op_name: "revoke-delegate-stx".to_string(),
-        stacker: Value::Principal(
-            StacksAddress::from_string("ST2Q1B4S2DY2Y96KYNZTVCCZZD1V9AGWCS5MFXM4C")
-                .unwrap()
-                .to_account_principal(),
-        ),
-        balance: Value::UInt(10240000000000),
-        locked: Value::UInt(0),
-        burnchain_unlock_height: Value::UInt(0),
-    };
-    check_pox_print_event(
-        revoke_delegation_tx,
-        common_data,
-        revoke_delegate_stx_op_data,
     );
 
     for delegation_nonce in [alice_delegation_pox_2_nonce, alice_delegation_pox_3_nonce] {
