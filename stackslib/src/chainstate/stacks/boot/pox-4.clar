@@ -657,7 +657,7 @@
 
 ;; Revokes the delegation to the current stacking pool.
 ;; New in pox-4: Fails if the delegation was already revoked.
-;; Returns the last delegation state.
+;; Returns the last delegation state even if the delegation is already expired.
 (define-public (revoke-delegate-stx)
   (let ((stacker { stacker: tx-sender })
         (last-delegation-state (map-get? delegation-state stacker)))

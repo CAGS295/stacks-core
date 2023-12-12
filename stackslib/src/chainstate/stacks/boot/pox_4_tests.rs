@@ -1261,30 +1261,25 @@ fn pox_4_revoke_delegate_stx_events() {
 
     // second revoke transaction should fail
     assert_eq!(
-        &alice_txs[&alice_revoke_2_nonce]
-            .result
-            .to_string(),
+        &alice_txs[&alice_revoke_2_nonce].result.to_string(),
         "(err 33)"
     );
 
     // check event for revoke delegation tx
-    let revoke_delegation_tx_events = &alice_txs
-        .get(&alice_revoke_nonce)
-        .unwrap()
-        .clone()
-        .events;
+    let revoke_delegation_tx_events = &alice_txs.get(&alice_revoke_nonce).unwrap().clone().events;
     assert_eq!(revoke_delegation_tx_events.len() as u64, 1);
-    let revoke_delegation_tx = &revoke_delegation_tx_events[0];
-    let revoke_delegate_stx_op_data = HashMap::from([]);
+    let revoke_delegation_tx_event = &revoke_delegation_tx_events[0];
+    let revoke_delegate_stx_op_data =
+        HashMap::from([("delegate-to", Value::Principal(bob_principal))]);
     let common_data = PoxPrintFields {
         op_name: "revoke-delegate-stx".to_string(),
         stacker: alice_principal.clone().into(),
-        balance: Value::UInt(alice_delegation_amount),
+        balance: Value::UInt(10240000000000),
         locked: Value::UInt(0),
         burnchain_unlock_height: Value::UInt(0),
     };
     check_pox_print_event(
-        revoke_delegation_tx,
+        revoke_delegation_tx_event,
         common_data,
         revoke_delegate_stx_op_data,
     );

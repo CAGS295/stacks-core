@@ -17,7 +17,7 @@
 use clarity::vm::ast::ASTRules;
 use clarity::vm::contexts::GlobalContext;
 use clarity::vm::errors::Error as ClarityError;
-use clarity::vm::types::{PrincipalData, QualifiedContractIdentifier, TupleData};
+use clarity::vm::types::{PrincipalData, QualifiedContractIdentifier, ResponseData, TupleData};
 use clarity::vm::Value;
 #[cfg(test)]
 use slog::slog_debug;
@@ -102,7 +102,11 @@ fn create_event_info_aggregation_code(function_name: &str) -> String {
 }
 
 /// Craft the code snippet to generate the method-specific `data` payload
-fn create_event_info_data_code(function_name: &str, args: &[Value]) -> String {
+fn create_event_info_data_code(
+    function_name: &str,
+    args: &[Value],
+    response: &ResponseData,
+) -> String {
     match function_name {
         "stack-stx" => {
             format!(
@@ -341,9 +345,17 @@ fn create_event_info_data_code(function_name: &str, args: &[Value]) -> String {
             format!(
                 r#"
                 {{
-                    data: {{ }}
+                    data: {{ delegate-to: '{delegate_to} }}
                 }}
                 "#,
+                delegate_to = response
+                    .data
+                    .clone()
+                    .expect_optional()
+                    .unwrap()
+                    .expect_tuple()
+                    .get("delegated-to")
+                    .unwrap()
             )
         }
         _ => "{{ data: {{ unimplemented: true }} }}".into(),
@@ -359,6 +371,7 @@ pub fn synthesize_pox_event_info(
     sender_opt: Option<&PrincipalData>,
     function_name: &str,
     args: &[Value],
+    response: &ResponseData,
 ) -> Result<Option<Value>, ClarityError> {
     let sender = match sender_opt {
         Some(sender) => sender,
@@ -389,12 +402,12 @@ pub fn synthesize_pox_event_info(
         None => return Ok(None),
     };
 
-    let data_snippet = create_event_info_data_code(function_name, args);
+    let data_snippet = create_event_info_data_code(function_name, args, response);
 
     test_debug!("Evaluate snippet:\n{}", &code_snippet);
     test_debug!("Evaluate data code:\n{}", &data_snippet);
 
-    let pox_2_contract = global_context
+    let pox_contract = global_context
         .database
         .get_contract(contract_id)
         .expect("FATAL: could not load PoX contract metadata");
@@ -403,7 +416,7 @@ pub fn synthesize_pox_event_info(
         .special_cc_handler_execute_read_only(
             sender.clone(),
             None,
-            pox_2_contract.contract_context,
+            pox_contract.contract_context,
             |env| {
                 let base_event_info = env
                     .eval_read_only_with_rules(contract_id, &code_snippet, ASTRules::PrecheckSize)
