@@ -1248,7 +1248,7 @@ fn pox_4_revoke_delegate_stx_events() {
         alice_nonce,
         alice_delegation_amount,
         PrincipalData::from(bob_address.clone()),
-        Some(target_height),
+        Some(target_height as u128),
         None,
     );
     let alice_delegate_2_nonce = alice_nonce;
