@@ -1168,8 +1168,6 @@ fn pox_3_unlocks() {
 #[test]
 fn pox_4_revoke_delegate_stx_events() {
     // Config for this test
-    // We are going to try locking for 2 reward cycles (10 blocks)
-    let lock_period = 2;
     let (epochs, pox_constants) = make_test_epochs_pox();
 
     let mut burnchain = Burnchain::default_unittest(
@@ -1209,10 +1207,6 @@ fn pox_4_revoke_delegate_stx_events() {
     // produce blocks until the first reward phase that everyone should be in
     while get_tip(peer.sortdb.as_ref()).block_height < u64::from(target_height) {
         latest_block = peer.tenure_with_txs(&[], &mut coinbase_nonce);
-        // if we reach epoch 2.1, perform the check
-        if get_tip(peer.sortdb.as_ref()).block_height > epochs[3].start_height {
-            assert_latest_was_burn(&mut peer);
-        }
     }
 
     info!(
@@ -1226,7 +1220,9 @@ fn pox_4_revoke_delegate_stx_events() {
         &alice,
         alice_nonce,
         alice_delegation_amount,
-        bob_principal.clone(),
+        bob_principal,
+        None,
+        None,
     );
     let alice_delegate_nonce = alice_nonce;
     alice_nonce += 1;
@@ -1239,12 +1235,39 @@ fn pox_4_revoke_delegate_stx_events() {
     let alice_revoke_2_nonce = alice_nonce;
     alice_nonce += 1;
 
-    let latest_block = peer.tenure_with_txs(
+    peer.tenure_with_txs(
         &[alice_delegate, alice_revoke, alice_revoke_2],
         &mut coinbase_nonce,
     );
-    let blocks = observer.get_blocks();
 
+    // check delegate with expiry
+
+    let target_height = get_tip(peer.sortdb.as_ref()).block_height + 10;
+    let alice_delegate_2 = make_pox_4_delegate_stx(
+        &alice,
+        alice_nonce,
+        alice_delegation_amount,
+        PrincipalData::from(bob_address.clone()),
+        Some(target_height),
+        None,
+    );
+    let alice_delegate_2_nonce = alice_nonce;
+    alice_nonce += 1;
+
+    peer.tenure_with_txs(&[alice_delegate_2], &mut coinbase_nonce);
+
+    // produce blocks until delegation expired
+    while get_tip(peer.sortdb.as_ref()).block_height <= u64::from(target_height) {
+        peer.tenure_with_txs(&[], &mut coinbase_nonce);
+    }
+
+    let alice_revoke_3 = make_pox_4_revoke_delegate_stx(&alice, alice_nonce);
+    let alice_revoke_3_nonce = alice_nonce;
+    alice_nonce += 1;
+
+    peer.tenure_with_txs(&[alice_revoke_3], &mut coinbase_nonce);
+
+    let blocks = observer.get_blocks();
     let mut alice_txs = HashMap::new();
 
     for b in blocks.into_iter() {
@@ -1257,20 +1280,16 @@ fn pox_4_revoke_delegate_stx_events() {
             }
         }
     }
-    assert_eq!(alice_txs.len() as u64, 3);
+    assert_eq!(alice_txs.len() as u64, 5);
 
-    // second revoke transaction should fail
-    assert_eq!(
-        &alice_txs[&alice_revoke_2_nonce].result.to_string(),
-        "(err 33)"
-    );
-
-    // check event for revoke delegation tx
+    // check event for first revoke delegation tx
     let revoke_delegation_tx_events = &alice_txs.get(&alice_revoke_nonce).unwrap().clone().events;
     assert_eq!(revoke_delegation_tx_events.len() as u64, 1);
     let revoke_delegation_tx_event = &revoke_delegation_tx_events[0];
-    let revoke_delegate_stx_op_data =
-        HashMap::from([("delegate-to", Value::Principal(bob_principal))]);
+    let revoke_delegate_stx_op_data = HashMap::from([(
+        "delegate-to",
+        Value::Principal(PrincipalData::from(bob_address.clone())),
+    )]);
     let common_data = PoxPrintFields {
         op_name: "revoke-delegate-stx".to_string(),
         stacker: alice_principal.clone().into(),
@@ -1282,6 +1301,23 @@ fn pox_4_revoke_delegate_stx_events() {
         revoke_delegation_tx_event,
         common_data,
         revoke_delegate_stx_op_data,
+    );
+
+    // second revoke transaction should fail
+    assert_eq!(
+        &alice_txs[&alice_revoke_2_nonce].result.to_string(),
+        "(err 33)"
+    );
+
+    // second delegate transaction should succeed
+    assert_eq!(
+        &alice_txs[&alice_delegate_2_nonce].result.to_string(),
+        "(ok true)"
+    );
+    // third revoke transaction should fail
+    assert_eq!(
+        &alice_txs[&alice_revoke_3_nonce].result.to_string(),
+        "(err 33)"
     );
 }
 

@@ -660,15 +660,15 @@
           (ok { stacker: tx-sender, lock-amount: amount-ustx, unlock-burn-height: (reward-cycle-to-burn-height (+ first-reward-cycle lock-period)) }))))
 
 ;; Revokes the delegation to the current stacking pool.
-;; New in pox-4: Fails if the delegation was already revoked.
-;; Returns the last delegation state even if the delegation is already expired.
+;; New in pox-4: Fails if the delegation was already revoked or has expired.
+;; Returns the last delegation state.
 (define-public (revoke-delegate-stx)
-  (let ((stacker { stacker: tx-sender })
-        (last-delegation-state (map-get? delegation-state stacker)))
+  (let ((last-delegation-state (get-check-delegation tx-sender)))
     ;; must be called directly by the tx-sender or by an allowed contract-caller
     (asserts! (check-caller-allowed)
               (err ERR_STACKING_PERMISSION_DENIED))
-    (asserts! (map-delete delegation-state stacker) (err ERR_DELEGATION_ALREADY_REVOKED))
+    (asserts! (is-some last-delegation-state) (err ERR_DELEGATION_ALREADY_REVOKED))
+    (asserts! (map-delete delegation-state { stacker: tx-sender }) (err ERR_DELEGATION_ALREADY_REVOKED))
     (ok last-delegation-state)))
 
 ;; Delegate to `delegate-to` the ability to stack from a given address.

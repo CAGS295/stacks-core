@@ -1803,6 +1803,8 @@ pub mod test {
         nonce: u64,
         amount: u128,
         delegate_to: PrincipalData,
+        until_burn_ht: Option<u128>,
+        pox_addr: Option<PoxAddress>,
     ) -> StacksTransaction {
         let payload = TransactionPayload::new_contract_call(
             boot_code_test_addr(),
@@ -1810,9 +1812,17 @@ pub mod test {
             "delegate-stx",
             vec![
                 Value::UInt(amount),
-                Value::Principal(delegate_to),
-                Value::none(),
-                Value::none(),
+                Value::Principal(delegate_to.clone()),
+                match until_burn_ht {
+                    Some(burn_ht) => Value::some(Value::UInt(burn_ht)).unwrap(),
+                    None => Value::none(),
+                },
+                match pox_addr {
+                    Some(addr) => {
+                        Value::some(Value::Tuple(addr.as_clarity_tuple().unwrap())).unwrap()
+                    }
+                    None => Value::none(),
+                },
             ],
         )
         .unwrap();
