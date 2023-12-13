@@ -342,23 +342,26 @@ fn create_event_info_data_code(
             )
         }
         "revoke-delegate-stx" => {
-            format!(
-                r#"
-                {{
-                    data: {{ delegate-to: '{delegate_to} }}
-                }}
-                "#,
-                delegate_to = response
-                    .data
-                    .clone()
-                    .expect_optional()
-                    .unwrap()
-                    .expect_tuple()
-                    .get("delegated-to")
-                    .unwrap()
-            )
+            if let Value::Optional(opt) = *response.data.clone() {
+                format!(
+                    r#"
+                    {{
+                        data: {{ delegate-to: '{delegate_to} }}
+                    }}
+                    "#,
+                    delegate_to = opt
+                        .data
+                        .map(|boxed_value| *boxed_value)
+                        .unwrap()
+                        .expect_tuple()
+                        .get("delegated-to")
+                        .unwrap()
+                )
+            } else {
+                "{data: {unimplemented: true}}".into()
+            }
         }
-        _ => "{{ data: {{ unimplemented: true }} }}".into(),
+        _ => "{data: {unimplemented: true}}".into(),
     }
 }
 
