@@ -61,6 +61,8 @@ pub enum RunLoopCommand {
         /// Taproot merkle root
         merkle_root: Option<MerkleRoot>,
     },
+    /// Send this Command to the runlop to start an RTT broadcast.
+    Ping,
 }
 
 /// The RunLoop state
@@ -226,6 +228,7 @@ impl<C: Coordinator> RunLoop<C> {
                     }
                 }
             }
+            RunLoopCommand::Ping => true,
         }
     }
 

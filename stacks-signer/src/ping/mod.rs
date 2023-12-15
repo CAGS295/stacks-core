@@ -1,3 +1,7 @@
+mod periodic_pinger;
+
+use std::fmt::Debug;
+
 use rand_core::{OsRng, RngCore};
 use serde_derive::{Deserialize, Serialize};
 
