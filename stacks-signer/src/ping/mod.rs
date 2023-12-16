@@ -2,13 +2,17 @@ mod periodic_pinger;
 
 use std::{fmt, fmt::Debug};
 
+use libstackerdb::StackerDBChunkData;
+pub use periodic_pinger::{PeriodicPinger, PingStopHandle};
 use rand_core::{OsRng, RngCore};
 use serde_derive::{Deserialize, Serialize};
+use slog::slog_warn;
+use stacks_common::warn;
 
-use crate::client::{PING_SLOT_ID, SIGNER_SLOTS_PER_USER};
+use crate::client::{SignerMessage, PING_SLOT_ID, SIGNER_SLOTS_PER_USER};
 
 /// Is an incoming slot update a ping::Packet?
-/// Use it to filter out other packets.
+/// Use it to filter out other slots.
 pub fn is_ping_slot(slot_id: u32) -> bool {
     let Some(v) = slot_id.checked_sub(PING_SLOT_ID) else {
         return false;
@@ -95,12 +99,41 @@ impl Debug for Pong {
     }
 }
 
+impl Packet {
+    /// Whether a Packet needs to be processed or skipped
+    pub fn verify_packet<'a>(chunk: &'a StackerDBChunkData, signer_id: u32) -> Option<Self> {
+        if !is_ping_slot(chunk.slot_id) {
+            return None;
+        }
+
+        let msg: SignerMessage = bincode::deserialize(&chunk.data)
+            .map_err(|e| {
+                warn!("Failed to deserialize ping slot {}: {e}", chunk.slot_id);
+            })
+            .ok()?;
+
+        let self_slot_id = msg.slot_id(signer_id);
+
+        let SignerMessage::Ping(packet) = msg else {
+            return None;
+        };
+
+        // don't process your own events
+        if self_slot_id == chunk.slot_id {
+            return None;
+        }
+
+        Some(packet)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::vec;
 
     use super::*;
     use crate::client::SignerMessage;
+    use stacks_common::util::secp256k1::MessageSignature;
 
     #[test]
     fn same_slot_for_ping_pong() {
@@ -131,5 +164,29 @@ mod tests {
         let _p = &ping.payload;
 
         assert!(!ping_string.contains("payload"));
+    }
+
+    #[test]
+    fn sane_verify_packet() {
+        // Ignore your own messages
+        let mut signer_id = 0;
+        let mut chunk = StackerDBChunkData {
+            // Not ping slot
+            slot_id: 0,
+            slot_version: 0,
+            sig: MessageSignature::empty(),
+            // Not a ping packet
+            data: vec![],
+        };
+        // Not ping slot
+        assert!(Packet::verify_packet(&chunk, signer_id).is_none());
+        chunk.slot_id = PING_SLOT_ID;
+        // Not a ping packet
+        assert!(Packet::verify_packet(&chunk, signer_id).is_none());
+        chunk.data = bincode::serialize(&Packet::from(Ping::new(0))).unwrap();
+        // Ignore your own messages
+        assert!(Packet::verify_packet(&chunk, signer_id).is_none());
+        signer_id += 1;
+        assert!(Packet::verify_packet(&chunk, signer_id).is_some());
     }
 }

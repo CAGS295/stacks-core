@@ -15,7 +15,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use std::collections::VecDeque;
 use std::sync::mpsc::Sender;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use blockstack_lib::burnchains::Txid;
 use blockstack_lib::chainstate::nakamoto::NakamotoBlock;
@@ -46,6 +46,7 @@ use crate::client::{
     SignerMessage, StackerDB, StacksClient,
 };
 use crate::config::{Config, Network};
+use crate::ping::{Packet as LatencyPacket, Ping};
 
 /// Which operation to perform
 #[derive(PartialEq, Clone)]
@@ -144,6 +145,8 @@ pub struct RunLoop<C> {
     /// Transactions that we expect to see in the next block
     // TODO: fill this in and do proper garbage collection
     pub transactions: Vec<Txid>,
+    /// Each entry is a distinct Ping request.
+    ping_entries: HashMap<u64, Instant>,
 }
 
 impl<C: Coordinator> RunLoop<C> {
@@ -231,7 +234,18 @@ impl<C: Coordinator> RunLoop<C> {
                     }
                 }
             }
-            RunLoopCommand::Ping { payload_size } => true,
+            RunLoopCommand::Ping { payload_size } => {
+                let ping = Ping::new(*payload_size as usize);
+                let id = ping.id();
+                debug!("Pinging RTT oberservers with id: {id}...");
+                self.ping_entries.insert(id, Instant::now());
+                let ack = self
+                    .stackerdb
+                    .send_message_with_retry(self.signing_round.signer_id, ping.into());
+                debug!("ACK: {:?}", ack);
+
+                true
+            }
         }
     }
 
@@ -338,14 +352,13 @@ impl<C: Coordinator> RunLoop<C> {
         stackerdb_chunk_event: StackerDBChunksEvent,
         res: Sender<Vec<OperationResult>>,
     ) {
-        let (_coordinator_id, coordinator_public_key) =
-            calculate_coordinator(&self.signing_round.public_keys);
-
-        let inbound_packets: Vec<Packet> = stackerdb_chunk_event
-            .modified_slots
-            .iter()
-            .filter_map(|chunk| self.verify_chunk(chunk, &coordinator_public_key))
-            .collect();
+        let inbound_packets = {
+            // intercept and consume ping packets
+            let signer_chunks =
+                self.filter_and_process_ping_chunks(&stackerdb_chunk_event.modified_slots);
+            // Filter out invalid signer packets
+            self.filter_signer_chunks(signer_chunks)
+        };
         self.handle_packets(res, &inbound_packets);
     }
 
@@ -527,7 +540,12 @@ impl<C: Coordinator> RunLoop<C> {
         coordinator_public_key: &PublicKey,
     ) -> Option<Packet> {
         // We only care about verified wsts packets. Ignore anything else
-        let signer_message = bincode::deserialize::<SignerMessage>(&chunk.data).ok()?;
+        let signer_message = bincode::deserialize::<SignerMessage>(&chunk.data)
+            .map_err(|_| {
+                warn!("Failed to deserialize slot.");
+            })
+            .ok()?;
+
         let mut packet = match signer_message {
             SignerMessage::Packet(packet) => packet,
             _ => return None, // This is a message for miners to observe. Ignore it.
@@ -659,6 +677,48 @@ impl<C: Coordinator> RunLoop<C> {
             warn!("Failed to send block submission to stacker-db: {:?}", e);
         }
     }
+
+    fn filter_and_process_ping_chunks<'a>(
+        &mut self,
+        chunks: &'a Vec<StackerDBChunkData>,
+    ) -> Vec<&'a StackerDBChunkData> {
+        let signer_id = self.signing_round.signer_id;
+        let mut signer_chunks = vec![];
+        for chunk in chunks {
+            let Some(msg) = LatencyPacket::verify_packet(&chunk, signer_id) else {
+                signer_chunks.push(chunk);
+                continue;
+            };
+
+            match msg {
+                LatencyPacket::Pong(pong) => {
+                    let id = pong.id();
+                    // Signer won't react to Pongs from Pings not initiated by it.
+                    self.ping_entries.get(&id).map(|tick| {
+                        let variate = tick.elapsed();
+                        info!("New RTT for id {id}: {:?}", variate);
+                    });
+                }
+                LatencyPacket::Ping(ping) => {
+                    let _ = self
+                        .stackerdb
+                        .send_message_with_retry(signer_id, ping.pong().into())
+                        .map(|ack| debug!("ACK: {:?}", ack))
+                        .map_err(|e| warn!("Sending RTT probe failed! noop with error: {e}"));
+                }
+            }
+        }
+        signer_chunks
+    }
+
+    fn filter_signer_chunks(&mut self, chunks: Vec<&StackerDBChunkData>) -> Vec<Packet> {
+        let (_, coordinator_public_key) = calculate_coordinator(&self.signing_round.public_keys);
+
+        chunks
+            .iter()
+            .filter_map(|chunk| self.verify_chunk(chunk, &coordinator_public_key))
+            .collect()
+    }
 }
 
 impl From<&Config> for RunLoop<FireCoordinator<v2::Aggregator>> {
@@ -732,6 +792,7 @@ impl From<&Config> for RunLoop<FireCoordinator<v2::Aggregator>> {
             mainnet: config.network == Network::Mainnet,
             blocks: HashMap::new(),
             transactions: Vec::new(),
+            ping_entries: HashMap::new(),
         }
     }
 }
