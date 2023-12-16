@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, thread};
@@ -62,13 +62,15 @@ struct SignerTest {
     // The channel for sending commands to the coordinator
     pub coordinator_cmd_sender: Sender<RunLoopCommand>,
     // The channels for sending commands to the signers
-    pub _signer_cmd_senders: Vec<Sender<RunLoopCommand>>,
+    pub signer_cmd_senders: Vec<Sender<RunLoopCommand>>,
     // The channels for receiving results from both the coordinator and the signers
     pub result_receivers: Vec<Receiver<Vec<OperationResult>>>,
     // The running coordinator and its threads
     pub running_coordinator: RunningSigner<SignerEventReceiver, Vec<OperationResult>>,
     // The running signer and its threads
     pub running_signers: Vec<RunningSigner<SignerEventReceiver, Vec<OperationResult>>>,
+    // RTT receivers
+    pub rtt_receivers: Vec<Receiver<(u64, Duration)>>,
 }
 
 impl SignerTest {
@@ -104,27 +106,31 @@ impl SignerTest {
         );
 
         let mut running_signers = vec![];
-        let mut _signer_cmd_senders = vec![];
+        let mut signer_cmd_senders = vec![];
+        let mut rtt_receivers = vec![];
         // Spawn all the signers first to listen to the coordinator request for dkg
         let mut result_receivers = Vec::new();
         for i in (1..num_signers).rev() {
             let (cmd_send, cmd_recv) = channel();
             let (res_send, res_recv) = channel();
             info!("spawn signer");
-            let running_signer = spawn_signer(&signer_configs[i as usize], cmd_recv, res_send);
+            let (running_signer, ping_rx) =
+                spawn_signer(&signer_configs[i as usize], cmd_recv, res_send);
             running_signers.push(running_signer);
-            _signer_cmd_senders.push(cmd_send);
+            signer_cmd_senders.push(cmd_send);
             result_receivers.push(res_recv);
+            rtt_receivers.push(ping_rx);
         }
         // Spawn coordinator second
         let (coordinator_cmd_sender, coordinator_cmd_recv) = channel();
         let (coordinator_res_send, coordinator_res_receiver) = channel();
         info!("spawn coordinator");
-        let running_coordinator = spawn_signer(
+        let (running_coordinator, ping_rx) = spawn_signer(
             &signer_configs[0],
             coordinator_cmd_recv,
             coordinator_res_send,
         );
+        rtt_receivers.push(ping_rx);
 
         result_receivers.push(coordinator_res_receiver);
 
@@ -142,10 +148,11 @@ impl SignerTest {
         Self {
             running_nodes: node,
             result_receivers,
-            _signer_cmd_senders,
+            signer_cmd_senders,
             coordinator_cmd_sender,
             running_coordinator,
             running_signers,
+            rtt_receivers,
         }
     }
 
@@ -174,14 +181,18 @@ fn spawn_signer(
     data: &str,
     receiver: Receiver<RunLoopCommand>,
     sender: Sender<Vec<OperationResult>>,
-) -> RunningSigner<SignerEventReceiver, Vec<OperationResult>> {
+) -> (
+    RunningSigner<SignerEventReceiver, Vec<OperationResult>>,
+    Receiver<(u64, Duration)>,
+) {
     let config = stacks_signer::config::Config::load_from_str(data).unwrap();
     let ev = SignerEventReceiver::new(vec![
         boot_code_id(MINERS_NAME, config.network == Network::Mainnet),
         config.stackerdb_contract_id.clone(),
     ]);
-    let runloop: stacks_signer::runloop::RunLoop<FireCoordinator<v2::Aggregator>> =
+    let mut runloop: stacks_signer::runloop::RunLoop<FireCoordinator<v2::Aggregator>> =
         stacks_signer::runloop::RunLoop::from(&config);
+    let ping_recv = runloop.subscribe_ping_collector();
     let mut signer: Signer<
         RunLoopCommand,
         Vec<OperationResult>,
@@ -193,7 +204,7 @@ fn spawn_signer(
         "Spawning signer {} on endpoint {}",
         config.signer_id, endpoint
     );
-    signer.spawn(endpoint).unwrap()
+    (signer.spawn(endpoint).unwrap(), ping_recv)
 }
 
 fn setup_stx_btc_node(
@@ -676,4 +687,41 @@ fn stackerdb_block_proposal() {
         panic!("Received unexpected message");
     }
     signer_test.shutdown();
+}
+
+#[test]
+#[ignore]
+fn signer_ping_mode() {
+    if env::var("BITCOIND_TEST") != Ok("1".into()) {
+        return;
+    }
+    let mut signer_test = SignerTest::new(2, 2);
+
+    let ping_cmd = RunLoopCommand::Ping { payload_size: 0 };
+    for tx in &signer_test.signer_cmd_senders {
+        tx.send(ping_cmd.clone()).unwrap();
+    }
+    signer_test.coordinator_cmd_sender.send(ping_cmd).unwrap();
+
+    signer_test
+        .coordinator_cmd_sender
+        .send(RunLoopCommand::Dkg)
+        .expect("failed to send Dkg command");
+
+    // The pings must have been handled by now
+    let _ = signer_test
+        .result_receivers
+        .last()
+        .unwrap()
+        .recv()
+        .expect("failed to recv results");
+
+    let rxs = signer_test.rtt_receivers;
+    signer_test.rtt_receivers = vec![];
+    signer_test.shutdown();
+
+    for rx in &rxs {
+        rx.recv().unwrap();
+        assert_eq!(rx.recv(), Err(RecvError));
+    }
 }
