@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use std::collections::VecDeque;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use blockstack_lib::burnchains::Txid;
@@ -147,6 +147,8 @@ pub struct RunLoop<C> {
     pub transactions: Vec<Txid>,
     /// Each entry is a distinct Ping request.
     ping_entries: HashMap<u64, Instant>,
+    /// Send RTT results back to the pinger thread.
+    ping_send: Option<Sender<(u64, Duration)>>,
 }
 
 impl<C: Coordinator> RunLoop<C> {
@@ -697,6 +699,7 @@ impl<C: Coordinator> RunLoop<C> {
                     self.ping_entries.get(&id).map(|tick| {
                         let variate = tick.elapsed();
                         info!("New RTT for id {id}: {:?}", variate);
+                        self.ping_send.as_ref().map(|tx| tx.send((id, variate)));
                     });
                 }
                 LatencyPacket::Ping(ping) => {
@@ -718,6 +721,13 @@ impl<C: Coordinator> RunLoop<C> {
             .iter()
             .filter_map(|chunk| self.verify_chunk(chunk, &coordinator_public_key))
             .collect()
+    }
+
+    /// Set a channel for the RTT collector thread
+    pub fn subscribe_ping_collector(&mut self) -> Receiver<(u64, Duration)> {
+        let (tx, rx) = channel();
+        self.ping_send = Some(tx);
+        rx
     }
 }
 
@@ -793,6 +803,7 @@ impl From<&Config> for RunLoop<FireCoordinator<v2::Aggregator>> {
             blocks: HashMap::new(),
             transactions: Vec::new(),
             ping_entries: HashMap::new(),
+            ping_send: None,
         }
     }
 }

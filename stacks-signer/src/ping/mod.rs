@@ -183,7 +183,8 @@ mod tests {
         chunk.slot_id = PING_SLOT_ID;
         // Not a ping packet
         assert!(Packet::verify_packet(&chunk, signer_id).is_none());
-        chunk.data = bincode::serialize(&Packet::from(Ping::new(0))).unwrap();
+        let msg: SignerMessage = Ping::new(0).into();
+        chunk.data = bincode::serialize(&msg).unwrap();
         // Ignore your own messages
         assert!(Packet::verify_packet(&chunk, signer_id).is_none());
         signer_id += 1;
