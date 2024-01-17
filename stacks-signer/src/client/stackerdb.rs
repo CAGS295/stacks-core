@@ -28,6 +28,7 @@ use wsts::net::{Message, Packet};
 use super::ClientError;
 use crate::client::retry_with_exponential_backoff;
 use crate::config::Config;
+use crate::ping::{Packet as PingPacket, Ping, Pong};
 
 /// Temporary placeholder for the number of slots allocated to a stacker-db writer. This will be retrieved from the stacker-db instance in the future
 /// See: https://github.com/stacks-network/stacks-blockchain/issues/3921
@@ -46,6 +47,8 @@ const NONCE_RESPONSE_SLOT_ID: u32 = 7;
 const SIGNATURE_SHARE_REQUEST_SLOT_ID: u32 = 8;
 const SIGNATURE_SHARE_RESPONSE_SLOT_ID: u32 = 9;
 const BLOCK_SLOT_ID: u32 = 10;
+/// overlapping slot for ping Packets.
+pub const PING_SLOT_ID: u32 = 10;
 
 /// The messages being sent through the stacker db contracts
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -54,6 +57,8 @@ pub enum SignerMessage {
     BlockResponse(BlockResponse),
     /// DKG and Signing round data for other signers to observe
     Packet(Packet),
+    /// Round-trip time for stackerdb events.
+    Ping(PingPacket),
 }
 
 /// The response that a signer sends back to observing miners
@@ -145,6 +150,17 @@ impl From<BlockValidateReject> for SignerMessage {
         Self::BlockResponse(BlockResponse::Rejected(rejection.into()))
     }
 }
+impl From<Ping> for SignerMessage {
+    fn from(value: Ping) -> Self {
+        Self::Ping(PingPacket::Ping(value))
+    }
+}
+
+impl From<Pong> for SignerMessage {
+    fn from(value: Pong) -> Self {
+        Self::Ping(PingPacket::Pong(value))
+    }
+}
 
 impl SignerMessage {
     /// Helper function to determine the slot ID for the provided stacker-db writer id
@@ -163,6 +179,7 @@ impl SignerMessage {
                 Message::SignatureShareResponse(_) => SIGNATURE_SHARE_RESPONSE_SLOT_ID,
             },
             Self::BlockResponse(_) => BLOCK_SLOT_ID,
+            SignerMessage::Ping(_) => PING_SLOT_ID,
         };
         SIGNER_SLOTS_PER_USER * id + slot_id
     }
