@@ -117,7 +117,7 @@ impl Debug for Pong {
 
 impl Packet {
     /// Whether a Packet needs to be processed or skipped
-    pub fn verify_packet<'a>(chunk: &'a StackerDBChunkData, signer_id: u32) -> Option<Self> {
+    pub fn verify_packet(chunk: &StackerDBChunkData, signer_id: u32) -> Option<Result<Self, ()>> {
         if !is_ping_slot(chunk.slot_id) {
             return None;
         }
@@ -136,10 +136,10 @@ impl Packet {
 
         // don't process your own events
         if self_slot_id == chunk.slot_id {
-            return None;
+            return Some(Err(()));
         }
 
-        Some(packet)
+        Some(Ok(packet))
     }
 }
 
@@ -149,6 +149,7 @@ mod tests {
 
     use super::*;
     use crate::client::SignerMessage;
+    use assert_matches::assert_matches;
     use stacks_common::util::secp256k1::MessageSignature;
 
     #[test]
@@ -202,8 +203,12 @@ mod tests {
         let msg: SignerMessage = Ping::new(0).into();
         chunk.data = bincode::serialize(&msg).unwrap();
         // Ignore your own messages
-        assert!(Packet::verify_packet(&chunk, signer_id).is_none());
+        assert_matches!(Packet::verify_packet(&chunk, signer_id), Some(packet) => {
+            assert!(packet.is_err());
+        });
         signer_id += 1;
-        assert!(Packet::verify_packet(&chunk, signer_id).is_some());
+        assert_matches!(Packet::verify_packet(&chunk, signer_id), Some(packet) => {
+            assert!(packet.is_ok());
+        });
     }
 }

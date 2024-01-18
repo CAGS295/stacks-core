@@ -688,9 +688,13 @@ impl<C: Coordinator> RunLoop<C> {
         let signer_id = self.signing_round.signer_id;
         let mut signer_chunks = vec![];
         for chunk in chunks {
-            let Some(msg) = LatencyPacket::verify_packet(&chunk, signer_id) else {
-                signer_chunks.push(chunk);
-                continue;
+            let msg = match LatencyPacket::verify_packet(chunk, signer_id) {
+                Some(Ok(packet)) => packet,
+                Some(Err(())) => continue,
+                None => {
+                    signer_chunks.push(chunk);
+                    continue;
+                }
             };
 
             match msg {
