@@ -794,6 +794,7 @@ impl PeerNetwork {
         ttl: u64,
     ) -> Result<ReplyHandleP2P, net_error> {
         if let Some(convo) = self.peers.get_mut(&event_id) {
+            debug!("about to send {:?}", message);
             let mut rh = convo.send_signed_request(message, ttl)?;
             self.saturate_p2p_socket(event_id, &mut rh)?;
             return Ok(rh);
@@ -843,6 +844,8 @@ impl PeerNetwork {
             info!("Not connected to {:?}", &neighbor_key);
             return Err(net_error::NoSuchNeighbor);
         };
+
+        debug!("relayed message {:?}", message);
 
         self.with_p2p_convo(event_id, |network, convo, client_sock| {
             let _msg = message.get_message_name();
