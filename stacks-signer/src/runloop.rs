@@ -254,12 +254,9 @@ impl<C: Coordinator> RunLoop<C> {
     /// Attempt to process the next command in the queue, and update state accordingly
     fn process_next_command(&mut self) {
         match self.state {
-            State::Uninitialized => {
-                debug!(
-                    "Signer is uninitialized. Waiting for aggregate public key from stacks node..."
-                );
-            }
-            State::Idle => {
+            // TODO check that all commands are safe to retry
+            // ?It is ok to try next command even if uninit, no livelock, idempotent retries.
+            State::Idle | State::Uninitialized => {
                 if let Some(command) = self.commands.pop_front() {
                     while !self.execute_command(&command) {
                         warn!("Failed to execute command. Retrying...");
@@ -361,6 +358,22 @@ impl<C: Coordinator> RunLoop<C> {
             // Filter out invalid signer packets
             self.filter_signer_chunks(signer_chunks)
         };
+
+        return;
+
+        let request_fn = || {
+            self.stacks_client
+                .get_aggregate_public_key()
+                .map_err(backoff::Error::transient)
+        };
+
+        if let Some(key) = retry_with_exponential_backoff(request_fn)
+            .expect("Failed to fetch aggregate_public_key due to timeout. Stacks node may be down.")
+        {
+            debug!("Aggregate public key is set: {:?}", key);
+            self.coordinator.set_aggregate_public_key(Some(key));
+        }
+
         self.handle_packets(res, &inbound_packets);
     }
 
@@ -837,9 +850,9 @@ impl<C: Coordinator> SignerRunLoop<Vec<OperationResult>, RunLoopCommand> for Run
         // TODO: This should be called every time as DKG can change at any time...but until we have the node
         // set up to receive cast votes...just do on initialization.
         if self.state == State::Uninitialized {
-            let request_fn = || self.initialize().map_err(backoff::Error::transient);
-            retry_with_exponential_backoff(request_fn)
-                .expect("Failed to connect to initialize due to timeout. Stacks node may be down.");
+            let _ = self
+                .initialize()
+                .map_err(|e| warn!("Failed to initialize due to: {e}"));
         }
         // Process any arrived events
         debug!("Processing event: {:?}", event);
