@@ -182,10 +182,9 @@ impl<C: Coordinator> RunLoop<C> {
                 info!("Starting DKG");
                 match self.coordinator.start_dkg_round() {
                     Ok(msg) => {
-                        let ack = self
+                        let _ = self
                             .stackerdb
                             .send_message_with_retry(self.signing_round.signer_id, msg.into());
-                        debug!("ACK: {:?}", ack);
                         self.state = State::Dkg;
                         true
                     }
@@ -221,10 +220,9 @@ impl<C: Coordinator> RunLoop<C> {
                     *merkle_root,
                 ) {
                     Ok(msg) => {
-                        let ack = self
+                        let _ = self
                             .stackerdb
                             .send_message_with_retry(self.signing_round.signer_id, msg.into());
-                        debug!("ACK: {:?}", ack);
                         self.state = State::Sign;
                         block_info.signing_round = true;
                         true
@@ -242,10 +240,9 @@ impl<C: Coordinator> RunLoop<C> {
                 let id = ping.id();
                 debug!("Pinging RTT oberservers with id: {id}...");
                 self.ping_entries.insert(id, Instant::now());
-                let ack = self
+                let _ = self
                     .stackerdb
                     .send_message_with_retry(self.signing_round.signer_id, ping.into());
-                debug!("ACK: {:?}", ack);
 
                 true
             }
@@ -657,13 +654,11 @@ impl<C: Coordinator> RunLoop<C> {
             outbound_messages.len()
         );
         for msg in outbound_messages {
-            let ack = self
+            if let Err(e) = self
                 .stackerdb
-                .send_message_with_retry(self.signing_round.signer_id, msg.into());
-            if let Ok(ack) = ack {
-                debug!("ACK: {:?}", ack);
-            } else {
-                warn!("Failed to send message to stacker-db instance: {:?}", ack);
+                .send_message_with_retry(self.signing_round.signer_id, msg.into())
+            {
+                warn!("Failed to send message to stacker-db instance: {:?}", e);
             }
         }
     }
@@ -711,7 +706,6 @@ impl<C: Coordinator> RunLoop<C> {
                     let _ = self
                         .stackerdb
                         .send_message_with_retry(signer_id, ping.pong().into())
-                        .map(|ack| debug!("ACK: {:?}", ack))
                         .map_err(|e| warn!("Sending RTT probe failed! noop with error: {e}"));
                 }
             }
