@@ -150,6 +150,8 @@ pub struct RunLoop<C> {
     ping_entries: HashMap<u64, Instant>,
     /// Send RTT results back to the pinger thread.
     ping_send: Option<Sender<(u64, Duration)>>,
+    /// Set of processed RTT entries. pong.id() and slot_id.
+    ping_tickets: HashSet<(u64, u32)>,
 }
 
 impl<C: Coordinator> RunLoop<C> {
@@ -698,8 +700,10 @@ impl<C: Coordinator> RunLoop<C> {
                     // Signer won't react to Pongs from Pings not initiated by it.
                     self.ping_entries.get(&id).map(|tick| {
                         let variate = tick.elapsed();
-                        info!("New RTT for id {id}: {:?}", variate);
-                        self.ping_send.as_ref().map(|tx| tx.send((id, variate)));
+                        if self.ping_tickets.insert((id, chunk.slot_id)) {
+                            info!("New RTT for id {id}: {:?}", variate);
+                            self.ping_send.as_ref().map(|tx| tx.send((id, variate)));
+                        }
                     });
                 }
                 LatencyPacket::Ping(ping) => {
@@ -803,6 +807,7 @@ impl From<&Config> for RunLoop<FireCoordinator<v2::Aggregator>> {
             transactions: Vec::new(),
             ping_entries: HashMap::new(),
             ping_send: None,
+            ping_tickets: HashSet::new(),
         }
     }
 }
@@ -1106,5 +1111,11 @@ mod tests {
 
         // RTT sent
         rx.recv().unwrap();
+
+        // event is processed once
+        assert!(run_loop.filter_and_process_ping_chunks(&chunks).is_empty());
+        drop(run_loop);
+        // empty rx.
+        rx.recv().unwrap_err();
     }
 }
